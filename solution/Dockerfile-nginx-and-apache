@@ -1,0 +1,10 @@
+FROM jamesportman/itmtt:2
+
+ADD nginx-default-site-port-81 /etc/nginx/sites-enabled/default
+
+RUN a2disconf php7.3-fpm
+ADD apache-proxy-config /etc/apache2/sites-enabled/000-default.conf
+RUN a2enmod proxy_http
+
+ENTRYPOINT ["/bin/sh", "-c", "apachectl start && service nginx start && service php7.3-fpm start && service mysql start && bash"]
+

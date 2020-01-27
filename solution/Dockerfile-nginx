@@ -1,0 +1,8 @@
+FROM jamesportman/itmtt:1
+
+RUN apt install -y nginx
+RUN rm /var/www/html/index.nginx-debian.html
+
+ADD nginx-default-site /etc/nginx/sites-enabled/default
+
+ENTRYPOINT ["/bin/sh", "-c", "service nginx start && service php7.3-fpm start && service mysql start && bash"]

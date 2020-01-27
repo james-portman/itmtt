@@ -1,0 +1,184 @@
+did docker pull, docker run
+
+Container runs, visiting the web port shows PHP source code
+
+First impressions:
+It isn't running through PHP interpreter.
+It will need PHP short open tags turning on at some point of the process.
+The curl to get public IP needs fixing.
+"DATE FORMAT HERE" will need fixing later.
+
+Inspect how it was made (I couldn't see a Dockerfile on docker hub)
+docker history --no-trunc roundrobintreegenerator/itech_media_sre_test
+
+Check service status - apache2, php7.3-fpm and mysql are all running happily.
+Cat /etc/issue - Debian 10 base
+
+
+From the docker history:
+<missing>                                                                 4 months ago        /bin/sh -c #(nop) COPY file:e137a20260fe8e16295d3852b078aceb57c75620264667cf09686036de7de823 in /etc/apache2/conf-available/php7.3-fpm.conf    801B                
+
+Can see the PHP config for Apache was added to conf-available but not enabled yet
+
+Enable it:
+a2enconf php7.3-fpm
+
+Still not processing PHP
+cat /etc/apache2/conf-available/php7.3-fpm.conf
+needs proxy_fcgi_module module, also needs mod_php7.c not to be enabled
+
+a2enmod proxy_fcgi
+(enabled proxy module as well)
+
+apachectl configtest
+service apache2 restart
+
+Service happy but still not processing php file
+
+cat /etc/apache2/conf-available/php7.3-fpm.conf
+FilesMatch section only matches *.phar or *.phtml, added .php:
+<FilesMatch ".+\.ph(p|ar|tml)$">
+
+service apache2 restart
+
+Service happy still, page now gives 500 error, presumably down to the challenge, parts of the php file need fixing as I saw earlier.
+
+tail /var/log/apache2/error.log
+
+[Mon Jan 27 12:36:42.069008 2020] [proxy_fcgi:error] [pid 1730:tid 139700589295360] [client 172.17.0.1:39000] AH01071: Got error 'PHP message: PHP Parse error:  syntax error, unexpected '&', expecting end of file in /var/www/html/index.php on line 71'
+
+
+vi /var/www/html/index.php +71
+
+Lots of echo commands, then a line with just "&nbsp;" on (html non breaking space), turn that into another echo
+  echo '&nbsp;';
+
+Page loads in browser now.
+
+
+Enable short open tags (top of the script has one)
+cat /etc/php/7.3/fpm/php.ini
+short_open_tag = Off
+echo "short_open_tag = On" > /etc/php/7.3/fpm/conf.d/30-short-open-tag.ini
+service php7.3-fpm restart
+Short tags now working
+
+
+Next part of test - set date format
+/var/www/html/index.php
+$dateFormat = ''; near top of script
+
+PHP DateTime docs (new DateTime("now"))
+https://www.php.net/manual/en/class.datetime.php
+and
+https://www.php.net/manual/en/datetime.formats.date.php
+
+Update it to actually print the date out not the format:
+$dateTimeObject->format($dateFormat)
+
+$dateFormat = 'l jS F Y - H:i:s';
+is close but without the added "the" and "of"
+
+With escapes for "normal" characters (not entirely happy - is there a nicer way?)
+$dateFormat = 'l \t\h\e jS \o\f F Y - H:i:s';
+
+
+Next step - get IP working
+From curl example:
+https://www.php.net/manual/en/curl.examples-basic.php
+
+curl_init should be setting the URL, so
+$curlHandle = curl_init(WEB_ADDRESS_FOR_IP);
+- works now
+
+
+Next step - get source code view working
+The missing info is being printed from $currentFileContents
+That is set from
+  $currentFile = fopen('', 'r');
+  $currentFileContents = htmlentities(fread($currentFile, filesize('')));
+So read https://www.php.net/manual/en/function.fopen.php
+
+Filename should be being given to fopen,
+get current script filename - use __FILE__ PHP magic/constant
+
+Source code box is still empty
+fread line is still using filesize('') so use __FILE__ constant here too
+Source code box now works.
+
+I made a Dockerfile at this stage - solution/Dockerfile-stage1
+built it and tested working with all of the above points.
+
+docker build --file Dockerfile-stage1 .
+pushed to jamesportman/itmtt:1 on dockerhub
+
+
+
+I was sent the challenge in a strangely formatted email from the recruiter,
+the last two steps seem like they are separate/additional actions,
+not sure if they are supposed to be added to the previous steps or done completely separately but I will build on top of the above so that you can follow my workings.
+
+
+Additional step - replace apache2 with nginx
+Again not clear here - could remove apache, or start with the parent dockerfile and remove the apache install part completely.
+In this instance I will just install nginx over the top and disable apache from running.
+
+
+Nginx steps:
+apt install nginx
+delete default/welcome html file
+edit default site to enable PHP fpm (there is example config for that already in there) - assume more config would be needed in prod but just getting this to work.
+
+/etc/nginx/sites-enabled/default
+
+        # pass PHP scripts to FastCGI server
+        #
+        location ~ \.php$ {
+                include snippets/fastcgi-php.conf;
+        
+                # With php-fpm (or other unix sockets):
+                fastcgi_pass unix:/run/php/php7.3-fpm.sock;
+                # With php-cgi (or other tcp sockets):
+                # fastcgi_pass 127.0.0.1:9000;
+        }
+
+*Added index.php as an index page/file
+
+Page loads and works fine now.
+
+Updated entrypoint.
+
+Docker file made and re-tested - Dockerfile-nginx
+Pushed to docker hub as jamesportman/itmtt:2
+
+
+
+NGINX & Apache stage - slightly unclear but I assume you mean have the client hit apache, apache forward to nginx, then nginx run the PHP through FPM.
+Again will continue from previous dockerfile.
+
+NGINX and PHP side is already working, just need to make apache proxy to nginx, and set them both on different ports since they will both try to run on 80
+Moved nginx to port 81
+
+Docker container works but apache still serving the PHP itself
+Will disable apache from running PHP to avoid confusion..
+Will undo some previous steps but as I said above I would do this in a tidier way if not for the challenge/letting you see my thought process and workings.
+
+a2disconf php7.3-fpm
+
+Add config to apache default site:
+ProxyPass / http://localhost:81/
+ProxyPassReverse / http://localhost:81/
+
+Restart apache,
+500 error now,
+tail /var/log/apache2/error.log
+
+mod proxy is running but proxy_http needs installing still;
+a2enmod proxy_http
+Restart apache,
+now working apache -> nginx -> php
+
+Updated entrypoint
+
+Dockerfile - Dockerfile-nginx-and-apache
+Pushed to docker hub as jamesportman/itmtt:3

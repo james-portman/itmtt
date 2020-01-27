@@ -1,0 +1,6 @@
+FROM roundrobintreegenerator/itech_media_sre_test
+
+RUN a2enconf php7.3-fpm
+RUN a2enmod proxy_fcgi
+ADD php7.3-fpm.conf /etc/apache2/conf-available/
+ADD index.php /var/www/html/
